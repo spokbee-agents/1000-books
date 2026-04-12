@@ -54,8 +54,13 @@ export default function Home() {
   }, []);
 
   const addBook = useCallback(async (book: Book) => {
-    const saved = await firebaseSaveBook(book);
-    setBooks((prev) => [saved, ...prev]);
+    try {
+      const saved = await firebaseSaveBook(book);
+      setBooks((prev) => [saved, ...prev]);
+    } catch(err: any) {
+      console.error("SaveBook Error:", err);
+      alert("Database Error: " + err.message);
+    }
   }, []);
 
   const removeBook = useCallback(async (firestoreId: string) => {
