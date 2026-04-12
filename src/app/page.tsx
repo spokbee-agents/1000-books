@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Camera, X, BookOpen, Sparkles, Loader2 } from "lucide-react";
+import {
+  Camera,
+  X,
+  BookOpen,
+  Sparkles,
+  Loader2,
+  Grid3X3,
+  List,
+  Download,
+} from "lucide-react";
+import localforage from "localforage";
 
 interface Book {
   id: number;
@@ -10,23 +20,48 @@ interface Book {
   author: string;
   coverUrl: string | null;
   pageCount: number | null;
+  capturedImage: string | null;
+  timestamp: number;
 }
 
 const GOAL = 1000;
-const STORAGE_KEY = "1000books_list";
+const STORE_KEY = "1000books_library";
 
-function loadBooks(): Book[] {
-  if (typeof window === "undefined") return [];
+// Configure localforage
+localforage.config({
+  name: "1000Books",
+  storeName: "books",
+  description: "1,000 Books reading challenge library",
+});
+
+async function loadBooks(): Promise<Book[]> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const books = await localforage.getItem<Book[]>(STORE_KEY);
+    return books ?? [];
   } catch {
     return [];
   }
 }
 
-function saveBooks(books: Book[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+async function persistBooks(books: Book[]) {
+  await localforage.setItem(STORE_KEY, books);
+}
+
+function exportCSV(books: Book[]) {
+  const header = "Title,Author,Pages,Date Scanned";
+  const rows = books.map((b) => {
+    const date = new Date(b.timestamp).toLocaleDateString();
+    const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    return `${esc(b.title)},${esc(b.author)},${b.pageCount ?? ""},${date}`;
+  });
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "1000-books-export.csv";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function Home() {
@@ -35,16 +70,19 @@ export default function Home() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [view, setView] = useState<"gallery" | "list">("gallery");
 
   useEffect(() => {
-    setBooks(loadBooks());
-    setMounted(true);
+    loadBooks().then((b) => {
+      setBooks(b);
+      setMounted(true);
+    });
   }, []);
 
   const addBook = useCallback((book: Book) => {
     setBooks((prev) => {
       const next = [book, ...prev];
-      saveBooks(next);
+      persistBooks(next);
       return next;
     });
   }, []);
@@ -52,7 +90,7 @@ export default function Home() {
   const removeBook = useCallback((id: number) => {
     setBooks((prev) => {
       const next = prev.filter((b) => b.id !== id);
-      saveBooks(next);
+      persistBooks(next);
       return next;
     });
   }, []);
@@ -149,20 +187,83 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* Book Grid */}
+      {/* Library Section */}
       {mounted && books.length > 0 && (
         <div className="w-full max-w-md">
-          <h2 className="text-lg font-bold text-slate-700 mb-3 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-amber-400" />
-            Your Library
-          </h2>
-          <div className="grid grid-cols-3 gap-3">
-            <AnimatePresence mode="popLayout">
-              {books.map((book) => (
-                <BookCard key={book.id} book={book} onRemove={removeBook} />
-              ))}
-            </AnimatePresence>
+          {/* Library header with controls */}
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold text-slate-700 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-400" />
+              Your Library
+            </h2>
+            <div className="flex items-center gap-2">
+              {/* Export CSV */}
+              <button
+                onClick={() => exportCSV(books)}
+                className="w-9 h-9 rounded-xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 hover:text-emerald-500 hover:border-emerald-300 transition-colors"
+                aria-label="Export CSV"
+                title="Export CSV"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+              {/* View toggle */}
+              <div className="flex bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <button
+                  onClick={() => setView("gallery")}
+                  className={`w-9 h-9 flex items-center justify-center transition-colors ${
+                    view === "gallery"
+                      ? "bg-sky-500 text-white"
+                      : "text-slate-400 hover:text-sky-500"
+                  }`}
+                  aria-label="Gallery view"
+                >
+                  <Grid3X3 className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setView("list")}
+                  className={`w-9 h-9 flex items-center justify-center transition-colors ${
+                    view === "list"
+                      ? "bg-sky-500 text-white"
+                      : "text-slate-400 hover:text-sky-500"
+                  }`}
+                  aria-label="List view"
+                >
+                  <List className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
+
+          {/* Gallery View */}
+          {view === "gallery" && (
+            <div className="grid grid-cols-3 gap-3">
+              <AnimatePresence mode="popLayout">
+                {books.map((book) => (
+                  <GalleryCard
+                    key={book.id}
+                    book={book}
+                    onRemove={removeBook}
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* List View */}
+          {view === "list" && (
+            <div className="flex flex-col gap-2">
+              <AnimatePresence mode="popLayout">
+                {books.map((book, i) => (
+                  <ListRow
+                    key={book.id}
+                    book={book}
+                    index={i}
+                    onRemove={removeBook}
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
       )}
 
@@ -195,20 +296,26 @@ export default function Home() {
   );
 }
 
-function BookCard({
+/* ────────────────────────────────────────────────────────── */
+/* Gallery Card — polaroid-style with captured image         */
+/* ────────────────────────────────────────────────────────── */
+
+function GalleryCard({
   book,
   onRemove,
 }: {
   book: Book;
   onRemove: (id: number) => void;
 }) {
+  const thumb = book.capturedImage || book.coverUrl;
+
   return (
     <motion.div
       layout
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
-      className="relative bg-white rounded-xl shadow-md overflow-hidden group"
+      className="relative bg-white rounded-2xl shadow-md overflow-hidden group ring-1 ring-slate-100"
     >
       <button
         onClick={() => onRemove(book.id)}
@@ -217,10 +324,11 @@ function BookCard({
       >
         <X className="w-3 h-3 text-white" />
       </button>
-      <div className="aspect-[2/3] bg-sky-50 flex items-center justify-center">
-        {book.coverUrl ? (
+
+      <div className="aspect-[2/3] bg-sky-50 flex items-center justify-center overflow-hidden">
+        {thumb ? (
           <img
-            src={book.coverUrl}
+            src={thumb}
             alt={book.title}
             className="w-full h-full object-cover"
           />
@@ -228,6 +336,7 @@ function BookCard({
           <BookOpen className="w-10 h-10 text-sky-300" />
         )}
       </div>
+
       <div className="p-2">
         <p className="text-xs font-semibold text-slate-700 leading-tight line-clamp-2">
           {book.title}
@@ -244,6 +353,56 @@ function BookCard({
     </motion.div>
   );
 }
+
+/* ────────────────────────────────────────────────────────── */
+/* List Row — compact title + author                         */
+/* ────────────────────────────────────────────────────────── */
+
+function ListRow({
+  book,
+  index,
+  onRemove,
+}: {
+  book: Book;
+  index: number;
+  onRemove: (id: number) => void;
+}) {
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, x: -20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 20 }}
+      className="flex items-center bg-white rounded-xl shadow-sm px-4 py-3 gap-3 group ring-1 ring-slate-100"
+    >
+      <span className="text-xs font-bold text-sky-400 w-6 text-right shrink-0">
+        {index + 1}
+      </span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-slate-700 truncate">
+          {book.title}
+        </p>
+        <p className="text-xs text-slate-400 truncate">{book.author}</p>
+      </div>
+      {book.pageCount && (
+        <span className="text-[10px] text-sky-500 font-medium shrink-0">
+          {book.pageCount}p
+        </span>
+      )}
+      <button
+        onClick={() => onRemove(book.id)}
+        className="w-6 h-6 rounded-full bg-rose-50 flex items-center justify-center opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity shrink-0"
+        aria-label={`Remove ${book.title}`}
+      >
+        <X className="w-3 h-3 text-rose-400" />
+      </button>
+    </motion.div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────── */
+/* Camera Modal                                              */
+/* ────────────────────────────────────────────────────────── */
 
 function CameraModal({
   onClose,
@@ -300,12 +459,16 @@ function CameraModal({
     setScanning(true);
     setError(null);
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Compress: scale to max 600px wide, JPEG at 60% quality
+    const MAX_WIDTH = 600;
+    const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
+    canvas.width = video.videoWidth * scale;
+    canvas.height = video.videoHeight * scale;
     const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(video, 0, 0);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const base64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+    const base64 = dataUrl.split(",")[1];
 
     try {
       const res = await fetch("/api/scan", {
@@ -319,7 +482,19 @@ function CameraModal({
         throw new Error(data?.error || `Scan failed (${res.status})`);
       }
 
-      const book: Book = await res.json();
+      const apiBook = await res.json();
+
+      // Build full Book with captured image
+      const book: Book = {
+        id: apiBook.id ?? Date.now(),
+        title: apiBook.title,
+        author: apiBook.author,
+        coverUrl: apiBook.coverUrl ?? null,
+        pageCount: apiBook.pageCount ?? null,
+        capturedImage: dataUrl,
+        timestamp: Date.now(),
+      };
+
       onScanned(book);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
