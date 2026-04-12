@@ -11,41 +11,16 @@ import {
   Grid3X3,
   List,
   Download,
+  Trash2,
 } from "lucide-react";
-import localforage from "localforage";
-
-interface Book {
-  id: number;
-  title: string;
-  author: string;
-  coverUrl: string | null;
-  pageCount: number | null;
-  capturedImage: string | null;
-  timestamp: number;
-}
+import {
+  saveBook as firebaseSaveBook,
+  getBooks,
+  removeBook as firebaseRemoveBook,
+  Book,
+} from "@/lib/firebase";
 
 const GOAL = 1000;
-const STORE_KEY = "1000books_library";
-
-// Configure localforage
-localforage.config({
-  name: "1000Books",
-  storeName: "books",
-  description: "1,000 Books reading challenge library",
-});
-
-async function loadBooks(): Promise<Book[]> {
-  try {
-    const books = await localforage.getItem<Book[]>(STORE_KEY);
-    return books ?? [];
-  } catch {
-    return [];
-  }
-}
-
-async function persistBooks(books: Book[]) {
-  await localforage.setItem(STORE_KEY, books);
-}
 
 function exportCSV(books: Book[]) {
   const header = "Title,Author,Pages,Date Scanned";
@@ -69,30 +44,23 @@ export default function Home() {
   const [showCamera, setShowCamera] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"gallery" | "list">("gallery");
 
   useEffect(() => {
-    loadBooks().then((b) => {
-      setBooks(b);
-      setMounted(true);
-    });
+    getBooks()
+      .then((b) => setBooks(b))
+      .finally(() => setLoading(false));
   }, []);
 
-  const addBook = useCallback((book: Book) => {
-    setBooks((prev) => {
-      const next = [book, ...prev];
-      persistBooks(next);
-      return next;
-    });
+  const addBook = useCallback(async (book: Book) => {
+    const saved = await firebaseSaveBook(book);
+    setBooks((prev) => [saved, ...prev]);
   }, []);
 
-  const removeBook = useCallback((id: number) => {
-    setBooks((prev) => {
-      const next = prev.filter((b) => b.id !== id);
-      persistBooks(next);
-      return next;
-    });
+  const removeBook = useCallback(async (firestoreId: string) => {
+    await firebaseRemoveBook(firestoreId);
+    setBooks((prev) => prev.filter((b) => b.firestoreId !== firestoreId));
   }, []);
 
   const progress = books.length;
@@ -122,7 +90,7 @@ export default function Home() {
       >
         <div className="text-center mb-4">
           <span className="text-5xl font-black text-sky-600">
-            {mounted ? progress : 0}
+            {loading ? 0 : progress}
           </span>
           <span className="text-2xl font-bold text-slate-400">
             {" "}
@@ -187,8 +155,20 @@ export default function Home() {
         )}
       </AnimatePresence>
 
+      {/* Loading state */}
+      {loading && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex flex-col items-center gap-3 mt-8"
+        >
+          <Loader2 className="w-8 h-8 text-sky-400 animate-spin" />
+          <p className="text-slate-400 text-sm">Loading your library...</p>
+        </motion.div>
+      )}
+
       {/* Library Section */}
-      {mounted && books.length > 0 && (
+      {!loading && books.length > 0 && (
         <div className="w-full max-w-md">
           {/* Library header with controls */}
           <div className="flex items-center justify-between mb-3">
@@ -240,7 +220,7 @@ export default function Home() {
               <AnimatePresence mode="popLayout">
                 {books.map((book) => (
                   <GalleryCard
-                    key={book.id}
+                    key={book.firestoreId}
                     book={book}
                     onRemove={removeBook}
                   />
@@ -255,7 +235,7 @@ export default function Home() {
               <AnimatePresence mode="popLayout">
                 {books.map((book, i) => (
                   <ListRow
-                    key={book.id}
+                    key={book.firestoreId}
                     book={book}
                     index={i}
                     onRemove={removeBook}
@@ -267,7 +247,7 @@ export default function Home() {
         </div>
       )}
 
-      {mounted && books.length === 0 && (
+      {!loading && books.length === 0 && (
         <motion.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -305,7 +285,7 @@ function GalleryCard({
   onRemove,
 }: {
   book: Book;
-  onRemove: (id: number) => void;
+  onRemove: (firestoreId: string) => void;
 }) {
   const thumb = book.capturedImage || book.coverUrl;
 
@@ -318,11 +298,11 @@ function GalleryCard({
       className="relative bg-white rounded-2xl shadow-md overflow-hidden group ring-1 ring-slate-100"
     >
       <button
-        onClick={() => onRemove(book.id)}
+        onClick={() => book.firestoreId && onRemove(book.firestoreId)}
         className="absolute top-1 right-1 z-10 w-6 h-6 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity"
         aria-label={`Remove ${book.title}`}
       >
-        <X className="w-3 h-3 text-white" />
+        <Trash2 className="w-3 h-3 text-white" />
       </button>
 
       <div className="aspect-[2/3] bg-sky-50 flex items-center justify-center overflow-hidden">
@@ -365,7 +345,7 @@ function ListRow({
 }: {
   book: Book;
   index: number;
-  onRemove: (id: number) => void;
+  onRemove: (firestoreId: string) => void;
 }) {
   return (
     <motion.div
@@ -390,11 +370,11 @@ function ListRow({
         </span>
       )}
       <button
-        onClick={() => onRemove(book.id)}
+        onClick={() => book.firestoreId && onRemove(book.firestoreId)}
         className="w-6 h-6 rounded-full bg-rose-50 flex items-center justify-center opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity shrink-0"
         aria-label={`Remove ${book.title}`}
       >
-        <X className="w-3 h-3 text-rose-400" />
+        <Trash2 className="w-3 h-3 text-rose-400" />
       </button>
     </motion.div>
   );
