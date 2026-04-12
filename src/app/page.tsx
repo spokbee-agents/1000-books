@@ -53,13 +53,15 @@ export default function Home() {
       .finally(() => setLoading(false));
   }, []);
 
-  const addBook = useCallback(async (book: Book) => {
+  const addBook = useCallback(async (book: Book): Promise<boolean> => {
     try {
       const saved = await firebaseSaveBook(book);
       setBooks((prev) => [saved, ...prev]);
+      return true;
     } catch(err: any) {
       console.error("SaveBook Error:", err);
-      alert("Database Error: " + err.message);
+      setError("Failed to save book: " + (err.message || String(err)));
+      return false;
     }
   }, []);
 
@@ -267,9 +269,12 @@ export default function Home() {
         {showCamera && (
           <CameraModal
             onClose={() => setShowCamera(false)}
-            onScanned={(book) => {
-              addBook(book);
+            onScanned={async (book) => {
+              const success = await addBook(book);
               setShowCamera(false);
+              if (!success) {
+                setError((prev) => prev || "Failed to save book. Please try again.");
+              }
             }}
             scanning={scanning}
             setScanning={setScanning}
@@ -397,7 +402,7 @@ function CameraModal({
   setError,
 }: {
   onClose: () => void;
-  onScanned: (book: Book) => void;
+  onScanned: (book: Book) => void | Promise<void>;
   scanning: boolean;
   setScanning: (v: boolean) => void;
   setError: (v: string | null) => void;
