@@ -1,0 +1,32 @@
+You are an Elite Engineer building a mobile-first PWA for Karina C and her kids to track 1,000 books they read over the summer.
+
+Tech Stack: Next.js App Router, Tailwind CSS, Framer Motion, Lucide React, Google Generative AI SDK (Gemini 1.5 Flash).
+
+Key Deliverables:
+1. Setup:
+- Run `npm install framer-motion lucide-react @google/generative-ai`
+- Clear `globals.css` and use a fun but modern, clean UI design (whites, soft blues, bright colors for kids, large readable typography).
+
+2. Frontend UI (`src/app/page.tsx`):
+- A massive, gamified progress bar at the top (e.g., "4 / 1000 Books Read!").
+- A massive primary button: "📸 Scan a Book!"
+- A Grid of book covers previously scanned.
+- Use `localStorage` to save the list of books across reloads (since we don't have her Firebase credentials yet, this allows her to test it immediately tonight).
+
+3. Camera Flow:
+- When "Scan a Book" is clicked, open a full-screen modal with a live `<video>` feed from the device's rear-facing camera.
+- Add a "Capture" button. When clicked, draw the frame to a `<canvas>`, extract a Base64 JPEG string, and `POST` it to `/api/scan`.
+- Show a cool scanning animation or loading state while waiting for the API.
+- Close the camera modal and add the returned book to the `localStorage` list.
+
+4. Backend API Route (`src/app/api/scan/route.ts`):
+- Read the base64 image from the request body.
+- Use the `@google/generative-ai` SDK (`process.env.GEMINI_API_KEY`) with the `gemini-1.5-flash` model. Provide the image and ask the model to strictly return JSON: `{"title": "Book Title", "author": "Author Name"}`. Extract the title and author.
+- After extracting them, use `fetch` to query the public Google Books API: `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(title)}+inauthor:${encodeURIComponent(author)}`.
+- Extract the high-res thumbnail (`volumeInfo.imageLinks.thumbnail` or similar) and `pageCount`. 
+- Return the final object: `{ title, author, coverUrl, pageCount, id: Date.now() }`.
+
+Instructions:
+- Write the full Next.js application. Make sure the code is production-ready, handles errors, and uses Tailwind correctly.
+- Add `GEMINI_API_KEY` usage properly so I can set it up via Vercel.
+- Commit the changes with "feat: initialize 1000 books AI scanner prototype" and push to main.
