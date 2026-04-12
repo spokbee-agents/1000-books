@@ -28,7 +28,7 @@ export async function POST(request: Request) {
 
     // Step 1: Use Gemini to identify the book
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     let result;
     try {
