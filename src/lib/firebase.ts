@@ -1,17 +1,19 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyBvu1DQDq1Bc10-sgxjspt3EEJ-tEMskHM",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "spokbee-agents.firebaseapp.com",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "spokbee-agents",
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "spokbee-agents.firebasestorage.app",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "289955521641",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:289955521641:web:dcb4116961c98df869aef8"
 };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-export const db = getFirestore(app);
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache()
+});
 
 export interface Book {
   id: number;
@@ -37,15 +39,20 @@ export const saveBook = async (book: Book) => {
 export const getBooks = async () => {
   try {
     const q = query(collection(db, "books"), orderBy("timestamp", "desc"));
-    const querySnapshot = await getDocs(q);
+    // Race against 8 seconds timeout
+    const querySnapshot = await Promise.race([
+      getDocs(q),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore connection timed out after 8 seconds. This might be an adblocker or a caching issue on your device.")), 8000))
+    ]) as any;
     const books: Book[] = [];
-    querySnapshot.forEach((doc) => {
+    querySnapshot.forEach((doc: any) => {
       books.push({ ...(doc.data() as Book), firestoreId: doc.id });
     });
     return books;
-  } catch (e) {
+  } catch (e: any) {
     console.error("Error getting documents: ", e);
-    return [];
+    // Let's pass the error up so the UI can alert it
+    throw new Error("Firestore Fetch Error: " + (e.message || String(e)));
   }
 };
 

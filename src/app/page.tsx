@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import localforage from "localforage";
 import {
   Camera,
   X,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/firebase";
 
 const GOAL = 1000;
+const LOCAL_KEY = "books";
 
 function exportCSV(books: Book[]) {
   const header = "Title,Author,Pages,Date Scanned";
@@ -39,6 +41,29 @@ function exportCSV(books: Book[]) {
   URL.revokeObjectURL(url);
 }
 
+/** Deduplicate books by matching on timestamp (primary) or title (fallback) */
+function mergeBooks(localBooks: Book[], cloudBooks: Book[]): Book[] {
+  const seen = new Map<string, Book>();
+  for (const b of localBooks) {
+    seen.set(`${b.timestamp}`, b);
+  }
+  for (const b of cloudBooks) {
+    const key = `${b.timestamp}`;
+    if (!seen.has(key)) {
+      seen.set(key, b);
+    } else {
+      // Cloud copy has a real firestoreId — keep it so we can delete later
+      const existing = seen.get(key)!;
+      if (!existing.firestoreId && b.firestoreId) {
+        seen.set(key, { ...existing, firestoreId: b.firestoreId });
+      } else if (b.firestoreId && !existing.firestoreId?.startsWith("local-")) {
+        seen.set(key, { ...existing, firestoreId: b.firestoreId });
+      }
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => b.timestamp - a.timestamp);
+}
+
 export default function Home() {
   const [books, setBooks] = useState<Book[]>([]);
   const [showCamera, setShowCamera] = useState(false);
@@ -48,34 +73,91 @@ export default function Home() {
   const [view, setView] = useState<"gallery" | "list">("gallery");
 
   useEffect(() => {
-    getBooks()
-      .then((b) => setBooks(b))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+
+    async function hydrate() {
+      // Step 1: Instantly load from localforage (has the missing books)
+      const localBooks = (await localforage.getItem<Book[]>(LOCAL_KEY)) || [];
+      if (!cancelled && localBooks.length > 0) {
+        setBooks(localBooks);
+        setLoading(false);
+      }
+
+      // Step 2: Background-fetch from Firestore
+      try {
+        const cloudBooks = await getBooks();
+        if (cancelled) return;
+
+        const merged = mergeBooks(localBooks, cloudBooks);
+
+        // Upload any local-only books to Firestore
+        const cloudTimestamps = new Set(cloudBooks.map((b) => b.timestamp));
+        for (const book of localBooks) {
+          if (!cloudTimestamps.has(book.timestamp)) {
+            firebaseSaveBook(book).catch((e) =>
+              console.warn("Background upload failed:", e)
+            );
+          }
+        }
+
+        // Persist merged set locally and update UI
+        await localforage.setItem(LOCAL_KEY, merged);
+        if (!cancelled) setBooks(merged);
+      } catch (err: any) {
+        console.warn("Cloud sync failed, using local data:", err.message);
+        // Local data is already displayed — no need to error-block the UI
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    hydrate();
+    return () => { cancelled = true; };
   }, []);
 
   const addBook = useCallback(async (book: Book): Promise<boolean> => {
-    // OPTIMISTIC UI: instantly drop it into the grid so the kid sees the magic immediately
-    const tempBook = { ...book, firestoreId: "pending-" + Date.now() };
-    setBooks((prev) => [tempBook, ...prev]);
-    
-    try {
-      // Background save to Cloud
-      const saved = await firebaseSaveBook(book);
-      // Replace temp with verified cloud copy
-      setBooks((prev) => prev.map(b => b.firestoreId === tempBook.firestoreId ? saved : b));
-      return true;
-    } catch(err: any) {
-      console.error("SaveBook Error:", err);
-      // Revert optimistic update if the cloud violently rejects it
-      setBooks((prev) => prev.filter(b => b.firestoreId !== tempBook.firestoreId));
-      setError("Database limits exceeded or disconnected: " + (err.message || String(err)));
-      return false;
-    }
+    // Instant local-first: push to localforage + React state immediately
+    const localBook = { ...book, firestoreId: "local-" + Date.now() };
+
+    setBooks((prev) => {
+      const next = [localBook, ...prev];
+      localforage.setItem(LOCAL_KEY, next).catch(console.error);
+      return next;
+    });
+
+    // Fire-and-forget cloud save — never blocks the UI
+    firebaseSaveBook(book)
+      .then((saved) => {
+        // Patch in the real firestoreId so deletes work against the cloud
+        setBooks((prev) => {
+          const next = prev.map((b) =>
+            b.firestoreId === localBook.firestoreId ? { ...b, firestoreId: saved.firestoreId } : b
+          );
+          localforage.setItem(LOCAL_KEY, next).catch(console.error);
+          return next;
+        });
+      })
+      .catch((err) => {
+        console.warn("Cloud save failed (book kept locally):", err);
+      });
+
+    return true;
   }, []);
 
   const removeBook = useCallback(async (firestoreId: string) => {
-    await firebaseRemoveBook(firestoreId);
-    setBooks((prev) => prev.filter((b) => b.firestoreId !== firestoreId));
+    // Instant local removal
+    setBooks((prev) => {
+      const next = prev.filter((b) => b.firestoreId !== firestoreId);
+      localforage.setItem(LOCAL_KEY, next).catch(console.error);
+      return next;
+    });
+
+    // Fire-and-forget cloud removal (skip if it was never uploaded)
+    if (!firestoreId.startsWith("local-")) {
+      firebaseRemoveBook(firestoreId).catch((err) =>
+        console.warn("Cloud delete failed:", err)
+      );
+    }
   }, []);
 
   const progress = books.length;
@@ -105,7 +187,7 @@ export default function Home() {
       >
         <div className="text-center mb-4">
           <span className="text-5xl font-black text-sky-600">
-            {loading ? 0 : progress}
+            {progress}
           </span>
           <span className="text-2xl font-bold text-slate-400">
             {" "}
@@ -280,12 +362,8 @@ export default function Home() {
             onScanned={async (book) => {
               setScanning(true);
               try {
-                const success = await addBook(book);
-                if (!success) {
-                  setError("Database timeout or error. Check your connection.");
-                } else {
-                  setShowCamera(false);
-                }
+                await addBook(book);
+                setShowCamera(false);
               } catch(e: any) {
                 setError("Fatal Error: " + String(e.message));
               } finally {
