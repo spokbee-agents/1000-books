@@ -26,7 +26,21 @@ export interface Book {
 
 export const saveBook = async (book: Book) => {
   try {
-    const docRef = await addDoc(collection(db, "books"), book);
+    // Firestore rejects 'undefined' fields. We must sanitize the book object (especially old V0 books).
+    const sanitizedBook = {
+      id: book.id || Date.now(),
+      title: book.title || "Unknown Title",
+      author: book.author || "Unknown Author",
+      pageCount: book.pageCount ?? null,
+      capturedImage: book.capturedImage ?? null,
+      coverUrl: book.coverUrl ?? null,
+      timestamp: book.timestamp || Date.now()
+    };
+    if (book.firestoreId) {
+      (sanitizedBook as any).firestoreId = book.firestoreId;
+    }
+
+    const docRef = await addDoc(collection(db, "books"), sanitizedBook);
     return { ...book, firestoreId: docRef.id };
   } catch (e) {
     console.error("Error adding document: ", e);
