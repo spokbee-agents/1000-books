@@ -11,7 +11,10 @@ const firebaseConfig = {
 };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-export const db = getFirestore(app);
+import { initializeFirestore } from "firebase/firestore";
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+});
 
 export interface Book {
   id: number;
