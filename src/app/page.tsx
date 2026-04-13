@@ -100,12 +100,14 @@ export default function Home() {
           }
         }
 
-        // Persist merged set locally and update UI
+        // Force UI to show cloud books even if local is empty
         await localforage.setItem(LOCAL_KEY, merged);
-        if (!cancelled) setBooks(merged);
+        if (!cancelled) {
+          setBooks(merged);
+        }
       } catch (err: any) {
-        console.warn("Cloud sync failed, using local data:", err.message);
-        // Local data is already displayed — no need to error-block the UI
+        console.error("Cloud sync failed:", err.message);
+        if (!cancelled) setError("Could not fetch from database. You are offline.");
       } finally {
         if (!cancelled) setLoading(false);
       }
