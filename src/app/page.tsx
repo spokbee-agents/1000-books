@@ -54,13 +54,21 @@ export default function Home() {
   }, []);
 
   const addBook = useCallback(async (book: Book): Promise<boolean> => {
+    // OPTIMISTIC UI: instantly drop it into the grid so the kid sees the magic immediately
+    const tempBook = { ...book, firestoreId: "pending-" + Date.now() };
+    setBooks((prev) => [tempBook, ...prev]);
+    
     try {
+      // Background save to Cloud
       const saved = await firebaseSaveBook(book);
-      setBooks((prev) => [saved, ...prev]);
+      // Replace temp with verified cloud copy
+      setBooks((prev) => prev.map(b => b.firestoreId === tempBook.firestoreId ? saved : b));
       return true;
     } catch(err: any) {
       console.error("SaveBook Error:", err);
-      setError("Failed to save book: " + (err.message || String(err)));
+      // Revert optimistic update if the cloud violently rejects it
+      setBooks((prev) => prev.filter(b => b.firestoreId !== tempBook.firestoreId));
+      setError("Database limits exceeded or disconnected: " + (err.message || String(err)));
       return false;
     }
   }, []);
@@ -457,15 +465,21 @@ function CameraModal({
     setScanning(true);
     setError(null);
 
-    // Compress: scale to max 600px wide, JPEG at 60% quality
-    const MAX_WIDTH = 600;
+    // Compress aggressively for Firestore: max 400px wide, JPEG at 40% quality
+    // This ensures the Base64 string never exceeds Firestore's 1MB document limit
+    const MAX_WIDTH = 400;
     const scale = Math.min(1, MAX_WIDTH / video.videoWidth);
     canvas.width = video.videoWidth * scale;
     canvas.height = video.videoHeight * scale;
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+    let dataUrl = canvas.toDataURL("image/jpeg", 0.4);
+    
+    // Failsafe: if it's still somehow over 800KB, crush it to 10% quality
+    if (dataUrl.length > 800000) {
+      dataUrl = canvas.toDataURL("image/jpeg", 0.1);
+    }
     const base64 = dataUrl.split(",")[1];
 
     try {
