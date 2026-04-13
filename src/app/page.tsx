@@ -405,7 +405,7 @@ function GalleryCard({
     >
       <button
         onClick={() => book.firestoreId && onRemove(book.firestoreId)}
-        className="absolute top-1 right-1 z-10 w-6 h-6 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity"
+        className="absolute top-2 right-2 z-10 w-8 h-8 bg-black/50 rounded-full flex items-center justify-center lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
         aria-label={`Remove ${book.title}`}
       >
         <Trash2 className="w-3 h-3 text-white" />
@@ -477,7 +477,7 @@ function ListRow({
       )}
       <button
         onClick={() => book.firestoreId && onRemove(book.firestoreId)}
-        className="w-6 h-6 rounded-full bg-rose-50 flex items-center justify-center opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity shrink-0"
+        className="w-8 h-8 rounded-full bg-rose-50 flex items-center justify-center shrink-0 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
         aria-label={`Remove ${book.title}`}
       >
         <Trash2 className="w-3 h-3 text-rose-400" />
