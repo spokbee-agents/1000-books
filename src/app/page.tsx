@@ -270,10 +270,18 @@ export default function Home() {
           <CameraModal
             onClose={() => setShowCamera(false)}
             onScanned={async (book) => {
-              const success = await addBook(book);
-              setShowCamera(false);
-              if (!success) {
-                setError((prev) => prev || "Failed to save book. Please try again.");
+              setScanning(true);
+              try {
+                const success = await addBook(book);
+                if (!success) {
+                  setError("Database timeout or error. Check your connection.");
+                } else {
+                  setShowCamera(false);
+                }
+              } catch(e: any) {
+                setError("Fatal Error: " + String(e.message));
+              } finally {
+                setScanning(false);
               }
             }}
             scanning={scanning}
