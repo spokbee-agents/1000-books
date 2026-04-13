@@ -107,7 +107,7 @@ export default function Home() {
         }
       } catch (err: any) {
         console.error("Cloud sync failed:", err.message);
-        if (!cancelled) setError("Could not fetch from database. You are offline.");
+        if (!cancelled) setError("DB Sync Error: " + err.message);
       } finally {
         if (!cancelled) setLoading(false);
       }

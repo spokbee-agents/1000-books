@@ -51,10 +51,10 @@ export const saveBook = async (book: Book) => {
 export const getBooks = async () => {
   try {
     const q = query(collection(db, "books"), orderBy("timestamp", "desc"));
-    // Race against 8 seconds timeout
+    // Extended timeout to 20 seconds to handle initial sync of large image payloads
     const querySnapshot = await Promise.race([
       getDocs(q),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore connection timed out after 8 seconds. This might be an adblocker or a caching issue on your device.")), 8000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore connection timed out after 20 seconds. Check your internet connection.")), 20000))
     ]) as any;
     const books: Book[] = [];
     querySnapshot.forEach((doc: any) => {
