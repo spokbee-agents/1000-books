@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
-import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "firebase/firestore";
+import { getFirestore, collection, addDoc, getDocs, query, orderBy, deleteDoc, doc } from "firebase/firestore/lite";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyBvu1DQDq1Bc10-sgxjspt3EEJ-tEMskHM",
@@ -11,10 +11,7 @@ const firebaseConfig = {
 };
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-import { initializeFirestore } from "firebase/firestore";
-export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
-});
+export const db = getFirestore(app);
 
 export interface Book {
   id: number;
@@ -54,11 +51,7 @@ export const saveBook = async (book: Book) => {
 export const getBooks = async () => {
   try {
     const q = query(collection(db, "books"), orderBy("timestamp", "desc"));
-    // Extended timeout to 20 seconds to handle initial sync of large image payloads
-    const querySnapshot = await Promise.race([
-      getDocs(q),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Firestore connection timed out after 20 seconds. Check your internet connection.")), 20000))
-    ]) as any;
+    const querySnapshot = await getDocs(q);
     const books: Book[] = [];
     querySnapshot.forEach((doc: any) => {
       books.push({ ...(doc.data() as Book), firestoreId: doc.id });
