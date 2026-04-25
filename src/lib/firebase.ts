@@ -22,12 +22,21 @@ export interface Book {
   capturedImage: string | null;
   coverUrl: string | null;
   timestamp: number;
+  kidId?: string;
+}
+
+export interface Kid {
+  id: string;
+  firestoreId?: string;
+  name: string;
+  color: string;
+  timestamp: number;
 }
 
 export const saveBook = async (book: Book) => {
   try {
     // Firestore rejects 'undefined' fields. We must sanitize the book object (especially old V0 books).
-    const sanitizedBook = {
+    const sanitizedBook: Record<string, any> = {
       id: book.id || Date.now(),
       title: book.title || "Unknown Title",
       author: book.author || "Unknown Author",
@@ -36,6 +45,9 @@ export const saveBook = async (book: Book) => {
       coverUrl: book.coverUrl ?? null,
       timestamp: book.timestamp || Date.now()
     };
+    if (book.kidId) {
+      sanitizedBook.kidId = book.kidId;
+    }
     if (book.firestoreId) {
       (sanitizedBook as any).firestoreId = book.firestoreId;
     }
@@ -69,6 +81,48 @@ export const removeBook = async (firestoreId: string) => {
     await deleteDoc(doc(db, "books", firestoreId));
   } catch (e) {
     console.error("Error removing document: ", e);
+    throw e;
+  }
+};
+
+export const saveKid = async (kid: Kid) => {
+  try {
+    const sanitizedKid: Record<string, any> = {
+      id: kid.id,
+      name: kid.name,
+      color: kid.color,
+      timestamp: kid.timestamp,
+    };
+    if (kid.firestoreId) {
+      sanitizedKid.firestoreId = kid.firestoreId;
+    }
+    const docRef = await addDoc(collection(db, "kids"), sanitizedKid);
+    return { ...kid, firestoreId: docRef.id };
+  } catch (e) {
+    console.error("Error saving kid: ", e);
+    throw e;
+  }
+};
+
+export const getKids = async () => {
+  try {
+    const querySnapshot = await getDocs(collection(db, "kids"));
+    const kids: Kid[] = [];
+    querySnapshot.forEach((doc: any) => {
+      kids.push({ ...(doc.data() as Kid), firestoreId: doc.id });
+    });
+    return kids.sort((a, b) => a.timestamp - b.timestamp);
+  } catch (e: any) {
+    console.error("Error getting kids: ", e);
+    throw new Error("Firestore Kids Fetch Error: " + (e.message || String(e)));
+  }
+};
+
+export const removeKid = async (firestoreId: string) => {
+  try {
+    await deleteDoc(doc(db, "kids", firestoreId));
+  } catch (e) {
+    console.error("Error removing kid: ", e);
     throw e;
   }
 };

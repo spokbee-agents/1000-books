@@ -15,14 +15,34 @@ import {
   Trash2,
 } from "lucide-react";
 import {
+  UserPlus,
+} from "lucide-react";
+import {
   saveBook as firebaseSaveBook,
   getBooks,
   removeBook as firebaseRemoveBook,
+  saveKid as firebaseSaveKid,
+  getKids,
   Book,
+  Kid,
 } from "@/lib/firebase";
 
 const GOAL = 1000;
 const LOCAL_KEY = "books";
+const KIDS_KEY = "kids";
+
+const KID_COLORS = [
+  "bg-blue-500",
+  "bg-pink-500",
+  "bg-emerald-500",
+  "bg-violet-500",
+  "bg-amber-500",
+  "bg-rose-500",
+  "bg-cyan-500",
+  "bg-lime-500",
+  "bg-indigo-500",
+  "bg-orange-500",
+];
 
 function exportCSV(books: Book[]) {
   const header = "Title,Author,Pages,Date Scanned";
@@ -66,29 +86,53 @@ function mergeBooks(localBooks: Book[], cloudBooks: Book[]): Book[] {
 
 export default function Home() {
   const [books, setBooks] = useState<Book[]>([]);
+  const [kids, setKids] = useState<Kid[]>([]);
+  const [activeKidId, setActiveKidId] = useState<string | null>(null);
   const [showCamera, setShowCamera] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"gallery" | "list">("gallery");
+  const [showAddKid, setShowAddKid] = useState(false);
+  const [newKidName, setNewKidName] = useState("");
 
   useEffect(() => {
     let cancelled = false;
 
     async function hydrate() {
-      // Step 1: Instantly load from localforage (has the missing books)
+      // Step 1: Instantly load from localforage
       const localBooks = (await localforage.getItem<Book[]>(LOCAL_KEY)) || [];
+      const localKids = (await localforage.getItem<Kid[]>(KIDS_KEY)) || [];
       if (!cancelled && localBooks.length > 0) {
         setBooks(localBooks);
+      }
+      if (!cancelled && localKids.length > 0) {
+        setKids(localKids);
+        setActiveKidId(localKids[0]?.id ?? null);
+      }
+      if (!cancelled && (localBooks.length > 0 || localKids.length > 0)) {
         setLoading(false);
       }
 
       // Step 2: Background-fetch from Firestore
       try {
-        const cloudBooks = await getBooks();
+        const [cloudBooks, cloudKids] = await Promise.all([getBooks(), getKids()]);
         if (cancelled) return;
 
         const merged = mergeBooks(localBooks, cloudBooks);
+
+        // Merge kids: dedupe by id
+        const kidMap = new Map<string, Kid>();
+        for (const k of localKids) kidMap.set(k.id, k);
+        for (const k of cloudKids) {
+          const existing = kidMap.get(k.id);
+          if (!existing) {
+            kidMap.set(k.id, k);
+          } else if (!existing.firestoreId && k.firestoreId) {
+            kidMap.set(k.id, { ...existing, firestoreId: k.firestoreId });
+          }
+        }
+        const mergedKids = Array.from(kidMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
         // Upload any local-only books to Firestore
         const cloudTimestamps = new Set(cloudBooks.map((b) => b.timestamp));
@@ -100,10 +144,24 @@ export default function Home() {
           }
         }
 
-        // Force UI to show cloud books even if local is empty
-        await localforage.setItem(LOCAL_KEY, merged);
+        // Upload any local-only kids to Firestore
+        const cloudKidIds = new Set(cloudKids.map((k) => k.id));
+        for (const kid of localKids) {
+          if (!cloudKidIds.has(kid.id)) {
+            firebaseSaveKid(kid).catch((e) =>
+              console.warn("Background kid upload failed:", e)
+            );
+          }
+        }
+
+        await Promise.all([
+          localforage.setItem(LOCAL_KEY, merged),
+          localforage.setItem(KIDS_KEY, mergedKids),
+        ]);
         if (!cancelled) {
           setBooks(merged);
+          setKids(mergedKids);
+          setActiveKidId((prev) => prev ?? mergedKids[0]?.id ?? null);
         }
       } catch (err: any) {
         console.error("Cloud sync failed:", err.message);
@@ -116,6 +174,35 @@ export default function Home() {
     hydrate();
     return () => { cancelled = true; };
   }, []);
+
+  const addKid = useCallback(async (name: string) => {
+    const kid: Kid = {
+      id: crypto.randomUUID(),
+      name,
+      color: KID_COLORS[kids.length % KID_COLORS.length],
+      timestamp: Date.now(),
+    };
+    const localKid = { ...kid, firestoreId: "local-" + Date.now() };
+
+    setKids((prev) => {
+      const next = [...prev, localKid];
+      localforage.setItem(KIDS_KEY, next).catch(console.error);
+      return next;
+    });
+    setActiveKidId(kid.id);
+
+    firebaseSaveKid(kid)
+      .then((saved) => {
+        setKids((prev) => {
+          const next = prev.map((k) =>
+            k.id === kid.id ? { ...k, firestoreId: saved.firestoreId } : k
+          );
+          localforage.setItem(KIDS_KEY, next).catch(console.error);
+          return next;
+        });
+      })
+      .catch((err) => console.warn("Cloud kid save failed:", err));
+  }, [kids.length]);
 
   const addBook = useCallback(async (book: Book): Promise<boolean> => {
     // Instant local-first: push to localforage + React state immediately
@@ -162,8 +249,58 @@ export default function Home() {
     }
   }, []);
 
-  const progress = books.length;
+  // Filter books for active kid (legacy books without kidId belong to first kid)
+  const filteredBooks = books.filter(
+    (b) => b.kidId === activeKidId || (!b.kidId && kids[0]?.id === activeKidId)
+  );
+  const progress = filteredBooks.length;
   const pct = Math.min((progress / GOAL) * 100, 100);
+  const activeKid = kids.find((k) => k.id === activeKidId);
+
+  // Onboarding: no kids yet
+  if (!loading && kids.length === 0) {
+    return (
+      <div className="flex flex-col flex-1 items-center justify-center px-4 py-12">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-sm text-center"
+        >
+          <div className="text-6xl mb-4">📚</div>
+          <h1 className="text-3xl font-extrabold text-sky-600 mb-2">Who is reading?</h1>
+          <p className="text-slate-500 mb-8">Add your first reader to get started!</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newKidName}
+              onChange={(e) => setNewKidName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newKidName.trim()) {
+                  addKid(newKidName.trim());
+                  setNewKidName("");
+                }
+              }}
+              placeholder="Enter child's name..."
+              className="flex-1 px-4 py-3 rounded-xl border border-slate-200 text-lg focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent"
+              autoFocus
+            />
+            <button
+              onClick={() => {
+                if (newKidName.trim()) {
+                  addKid(newKidName.trim());
+                  setNewKidName("");
+                }
+              }}
+              disabled={!newKidName.trim()}
+              className="px-6 py-3 bg-sky-500 text-white font-bold rounded-xl disabled:opacity-40 transition-opacity"
+            >
+              Add
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col flex-1 items-center px-4 py-6 pb-20">
@@ -171,7 +308,7 @@ export default function Home() {
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="text-center mb-6"
+        className="text-center mb-4"
       >
         <h1 className="text-3xl font-extrabold tracking-tight text-sky-600 flex items-center justify-center gap-2">
           <BookOpen className="w-8 h-8" />
@@ -179,6 +316,84 @@ export default function Home() {
         </h1>
         <p className="text-sm text-slate-500 mt-1">Summer Reading Challenge</p>
       </motion.div>
+
+      {/* Kid Profile Switcher */}
+      {kids.length > 0 && (
+        <div className="w-full max-w-md mb-4">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            {kids.map((kid) => (
+              <button
+                key={kid.id}
+                onClick={() => setActiveKidId(kid.id)}
+                className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold transition-all ${
+                  kid.id === activeKidId
+                    ? `${kid.color} text-white shadow-md`
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {kid.name}
+              </button>
+            ))}
+            <button
+              onClick={() => setShowAddKid(true)}
+              className="shrink-0 w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+              aria-label="Add kid"
+            >
+              <UserPlus className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Inline Add Kid */}
+          <AnimatePresence>
+            {showAddKid && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="flex gap-2 mt-2">
+                  <input
+                    type="text"
+                    value={newKidName}
+                    onChange={(e) => setNewKidName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newKidName.trim()) {
+                        addKid(newKidName.trim());
+                        setNewKidName("");
+                        setShowAddKid(false);
+                      }
+                      if (e.key === "Escape") setShowAddKid(false);
+                    }}
+                    placeholder="Child's name..."
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => {
+                      if (newKidName.trim()) {
+                        addKid(newKidName.trim());
+                        setNewKidName("");
+                        setShowAddKid(false);
+                      }
+                    }}
+                    disabled={!newKidName.trim()}
+                    className="px-4 py-2 bg-sky-500 text-white text-sm font-bold rounded-xl disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => { setShowAddKid(false); setNewKidName(""); }}
+                    className="px-3 py-2 text-sm text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
 
       {/* Progress Section */}
       <motion.div
@@ -196,7 +411,7 @@ export default function Home() {
             / {GOAL}
           </span>
           <p className="text-lg font-semibold text-slate-600 mt-1">
-            Books Read!
+            {activeKid ? `${activeKid.name}'s Books!` : "Books Read!"}
           </p>
         </div>
 
@@ -267,18 +482,18 @@ export default function Home() {
       )}
 
       {/* Library Section */}
-      {!loading && books.length > 0 && (
+      {!loading && filteredBooks.length > 0 && (
         <div className="w-full max-w-md">
           {/* Library header with controls */}
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-bold text-slate-700 flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-amber-400" />
-              Your Library
+              {activeKid ? `${activeKid.name}'s Library` : "Your Library"}
             </h2>
             <div className="flex items-center gap-2">
               {/* Export CSV */}
               <button
-                onClick={() => exportCSV(books)}
+                onClick={() => exportCSV(filteredBooks)}
                 className="w-9 h-9 rounded-xl bg-white shadow-sm border border-slate-200 flex items-center justify-center text-slate-500 hover:text-emerald-500 hover:border-emerald-300 transition-colors"
                 aria-label="Export CSV"
                 title="Export CSV"
@@ -317,7 +532,7 @@ export default function Home() {
           {view === "gallery" && (
             <div className="grid grid-cols-3 gap-3">
               <AnimatePresence mode="popLayout">
-                {books.map((book) => (
+                {filteredBooks.map((book) => (
                   <GalleryCard
                     key={book.firestoreId}
                     book={book}
@@ -332,7 +547,7 @@ export default function Home() {
           {view === "list" && (
             <div className="flex flex-col gap-2">
               <AnimatePresence mode="popLayout">
-                {books.map((book, i) => (
+                {filteredBooks.map((book, i) => (
                   <ListRow
                     key={book.firestoreId}
                     book={book}
@@ -346,13 +561,13 @@ export default function Home() {
         </div>
       )}
 
-      {!loading && books.length === 0 && (
+      {!loading && filteredBooks.length === 0 && (
         <motion.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="text-slate-400 text-center mt-8"
         >
-          No books yet — scan your first one!
+          {activeKid ? `No books yet for ${activeKid.name} — scan the first one!` : "No books yet — scan your first one!"}
         </motion.p>
       )}
 
@@ -364,7 +579,7 @@ export default function Home() {
             onScanned={async (book) => {
               setScanning(true);
               try {
-                await addBook(book);
+                await addBook({ ...book, kidId: activeKidId ?? undefined });
                 setShowCamera(false);
               } catch(e: any) {
                 setError("Fatal Error: " + String(e.message));
